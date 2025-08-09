@@ -11,7 +11,17 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - 5432:5432
+      - "127.0.0.1:5432:5432"
+
+  backend:
+    build:
+      context: .
+    container_name: backend
+    network_mode: host
+    depends_on:
+      - postgres
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+
