@@ -3,6 +3,7 @@ package bot
 import (
 	"sync"
 
+	"github.com/Fi44er/btc_bot/config"
 	"github.com/Fi44er/btc_bot/internal/service"
 	"github.com/Fi44er/btc_bot/utils"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -37,12 +38,14 @@ type Bot struct {
 	userStates  map[int64]string
 	stateMutex  *sync.Mutex
 	hasAddress  bool
+	config      *config.Config
 }
 
 func NewBot(
 	api *tgbotapi.BotAPI,
 	userService *service.UserService,
 	logger *utils.Logger,
+	config *config.Config,
 ) *Bot {
 	return &Bot{
 		API:         api,
@@ -51,17 +54,20 @@ func NewBot(
 		userStates:  make(map[int64]string),
 		stateMutex:  &sync.Mutex{},
 		hasAddress:  false,
+		config:      config,
 	}
 }
 
 func (b *Bot) Start() {
 	updates := b.API.GetUpdatesChan(tgbotapi.NewUpdate(0))
 	for update := range updates {
-		if update.Message == nil {
+		if update.CallbackQuery != nil {
+			b.handleCallbackQuery(update.CallbackQuery)
 			continue
 		}
-
-		b.HandleUpdate(update)
+		if update.Message != nil {
+			b.HandleUpdate(update)
+		}
 	}
 }
 

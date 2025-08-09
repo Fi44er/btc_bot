@@ -136,7 +136,7 @@ func (b *Bot) notifyAboutTransaction(user *models.User, tx *models.Transaction, 
 	rate, err := getBTCRUBRate()
 	if err != nil {
 		b.logger.Warnf("Failed to get BTC/RUB rate: %v", err)
-		rate = 6500000.0
+		rate = 3900027.0
 	}
 	rub := tx.AmountBTC * rate
 
@@ -145,19 +145,24 @@ func (b *Bot) notifyAboutTransaction(user *models.User, tx *models.Transaction, 
 		testNote = "\n\n⚠️ ЭТО ТЕСТОВОЕ УВЕДОМЛЕНИЕ"
 	}
 
-	adminMsg := tgbotapi.NewMessage(
-		b.userService.GetAdminChatID(),
-		fmt.Sprintf("✅ Новая транзакция%s\n\nПользователь: %d\nКарта: %s\nСумма: %.8f BTC (%.2f ₽)\nАдрес: %s\nTXID: %s",
-			testNote,
-			user.TelegramID,
-			user.CardNumber,
-			tx.AmountBTC,
-			rub,
-			tx.Address,
-			tx.TxID,
-		),
+	adminMsgText := fmt.Sprintf("✅ Новая транзакция%s\n\nПользователь: %d\nКарта: %s\nСумма: %.8f BTC (%.2f ₽)\nАдрес: %s\nTXID: %s",
+		testNote,
+		user.TelegramID,
+		user.CardNumber,
+		tx.AmountBTC,
+		rub,
+		tx.Address,
+		tx.TxID,
 	)
+
+	// Создаем inline-кнопку только для админа
+	btn := tgbotapi.NewInlineKeyboardButtonData("🔑 Показать приватный ключ",
+		fmt.Sprintf("show_key:%s", tx.Address))
+	keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(btn))
+
+	adminMsg := tgbotapi.NewMessage(b.userService.GetAdminChatID(), adminMsgText)
 	adminMsg.ParseMode = "Markdown"
+	adminMsg.ReplyMarkup = keyboard
 	b.API.Send(adminMsg)
 
 	if !isTest {

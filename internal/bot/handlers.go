@@ -3,7 +3,10 @@ package bot
 import (
 	"context"
 	"fmt"
+	"strings"
 
+	"github.com/Fi44er/btc_bot/utils"
+	"github.com/btcsuite/btcd/chaincfg"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
@@ -111,6 +114,49 @@ func (b *Bot) handleStart(ctx context.Context, chatID, userID int64, hasAddress 
 	msg := tgbotapi.NewMessage(chatID, welcomeText)
 	msg.ReplyMarkup = GetMainMenu(hasAddress)
 	b.API.Send(msg)
+}
+
+func (b *Bot) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
+	// Проверяем, что это наш callback
+	if strings.HasPrefix(callback.Data, "show_key:") {
+		// Извлекаем walletID из callback данных
+
+		masterKey := b.config.MasterKeySeed
+		address := strings.TrimPrefix(callback.Data, "show_key:")
+		params := &chaincfg.TestNet3Params
+
+		privateAddrKey, err := utils.GetAddressPrivateKey(masterKey, address, params)
+		if err != nil {
+			b.logger.Errorf("Failed to get private key: %v", err)
+			return
+		}
+		// Формируем ответ с приватными данными
+		response := fmt.Sprintf("🔐 Данные кошелька:\n\nАдрес: %s\nПриватный ключ: %s",
+			address,
+			privateAddrKey)
+
+		// Отправляем ответ
+		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, response)
+		if _, err := b.API.Send(msg); err != nil {
+			b.logger.Errorf("Failed to send wallet info: %v", err)
+		}
+
+		// Удаляем кнопку из оригинального сообщения
+		edit := tgbotapi.NewEditMessageReplyMarkup(
+			callback.Message.Chat.ID,
+			callback.Message.MessageID,
+			tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}},
+		)
+		if _, err := b.API.Send(edit); err != nil {
+			b.logger.Errorf("Failed to remove button: %v", err)
+		}
+
+		// Подтверждаем обработку callback
+		callbackConfig := tgbotapi.NewCallback(callback.ID, "")
+		if _, err := b.API.Request(callbackConfig); err != nil {
+			b.logger.Errorf("Failed to answer callback: %v", err)
+		}
+	}
 }
 
 func (b *Bot) handleAddressRequest(ctx context.Context, chatID, userID int64) {
