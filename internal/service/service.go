@@ -62,6 +62,10 @@ func (s *UserService) UpdateAddress(ctx context.Context, telegramID int64) (*mod
 		return nil, errors.New("user not found")
 	}
 
+	if user.DepositAddress != "" {
+		return user, nil
+	}
+
 	address, err := s.generateNewAddress()
 	if err != nil {
 		return nil, err

@@ -13,11 +13,6 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-var (
-	testnet_api_url = "https://mempool.space/testnet4/api"
-	mainnet_api_url = "https://mempool.space/api"
-)
-
 func (b *Bot) handleTestTransaction(chatID, userID int64) {
 	user, err := b.userService.GetUser(context.Background(), userID)
 	if err != nil || user == nil {
@@ -40,9 +35,47 @@ func (b *Bot) handleTestTransaction(chatID, userID int64) {
 	b.API.Send(msg)
 }
 
+func (b *Bot) handleCheckTransactions(ctx context.Context, chatID, userID int64) {
+	user, err := b.userService.GetUser(ctx, userID)
+	if err != nil || user == nil || user.DepositAddress == "" {
+		msg := tgbotapi.NewMessage(chatID, "У вас нет активного адреса для проверки.")
+		msg.ReplyMarkup = GetMainMenu(false)
+		b.API.Send(msg)
+		return
+	}
+
+	msg := tgbotapi.NewMessage(chatID, "🔍 Проверяю транзакции для вашего адреса...")
+	b.API.Send(msg)
+
+	transactions, err := b.checkUserTransactions(ctx, user.DepositAddress)
+	if err != nil {
+		b.logger.Errorf("Error checking transactions: %v", err)
+		msg := tgbotapi.NewMessage(chatID, "Произошла ошибка при проверке транзакций.")
+		msg.ReplyMarkup = GetMainMenu(true)
+		b.API.Send(msg)
+		return
+	}
+
+	if len(transactions) == 0 {
+		msg := tgbotapi.NewMessage(chatID, "На вашем адресе пока нет новых транзакций.")
+		msg.ReplyMarkup = GetMainMenu(true)
+		b.API.Send(msg)
+		return
+	}
+
+	response := "📊 Найдены транзакции:\n\n"
+	for _, tx := range transactions {
+		response += fmt.Sprintf("• %.8f BTC - %s\n", tx.AmountBTC, tx.TxID)
+	}
+
+	msg = tgbotapi.NewMessage(chatID, response)
+	msg.ReplyMarkup = GetMainMenu(true)
+	b.API.Send(msg)
+}
+
 func (b *Bot) checkUserTransactions(ctx context.Context, address string) ([]*models.Transaction, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("%s/address/%s/txs", testnet_api_url, address)
+	url := fmt.Sprintf("%s/address/%s/txs", testnetAPIURL, address)
 
 	resp, err := client.Get(url)
 	if err != nil {
@@ -155,7 +188,6 @@ func (b *Bot) notifyAboutTransaction(user *models.User, tx *models.Transaction, 
 		tx.TxID,
 	)
 
-	// Создаем inline-кнопку только для админа
 	btn := tgbotapi.NewInlineKeyboardButtonData("🔑 Показать приватный ключ",
 		fmt.Sprintf("show_key:%s", tx.Address))
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(btn))

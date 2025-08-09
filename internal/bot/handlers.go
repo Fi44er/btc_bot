@@ -16,6 +16,8 @@ func (b *Bot) HandleUpdate(update tgbotapi.Update) {
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text
 
+	b.logger.Infof("Processing message from user %d: %s", userID, text)
+
 	user, err := b.userService.GetUser(ctx, userID)
 	if err != nil {
 		b.logger.Errorf("Failed to get user: %v", err)
@@ -23,7 +25,6 @@ func (b *Bot) HandleUpdate(update tgbotapi.Update) {
 	}
 
 	hasAddress := user != nil && user.DepositAddress != ""
-
 	userState := b.getUserState(userID)
 
 	if userState == stateAwaitingCardNumber {
@@ -36,62 +37,20 @@ func (b *Bot) HandleUpdate(update tgbotapi.Update) {
 		b.handleTestTransaction(update.Message.Chat.ID, update.Message.From.ID)
 	case "/start":
 		b.handleStart(ctx, chatID, userID, hasAddress)
-
 	case "💰 Получить адрес для пополнения":
 		b.handleAddressRequest(ctx, chatID, userID)
-
 	case "💳 Указать номер карты":
 		b.setState(userID, stateAwaitingCardNumber)
 		msg := tgbotapi.NewMessage(chatID, "Пожалуйста, отправьте номер вашей карты:")
 		msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
 		b.API.Send(msg)
-
 	case "🔄 Проверить статус транзакции":
 		b.handleCheckTransactions(ctx, chatID, userID)
-
 	default:
 		msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Используйте меню.")
 		msg.ReplyMarkup = GetMainMenu(hasAddress)
 		b.API.Send(msg)
 	}
-}
-
-func (b *Bot) handleCheckTransactions(ctx context.Context, chatID, userID int64) {
-	user, err := b.userService.GetUser(ctx, userID)
-	if err != nil || user == nil || user.DepositAddress == "" {
-		msg := tgbotapi.NewMessage(chatID, "У вас нет активного адреса для проверки.")
-		msg.ReplyMarkup = GetMainMenu(false)
-		b.API.Send(msg)
-		return
-	}
-
-	msg := tgbotapi.NewMessage(chatID, "🔍 Проверяю транзакции для вашего адреса...")
-	b.API.Send(msg)
-
-	transactions, err := b.checkUserTransactions(ctx, user.DepositAddress)
-	if err != nil {
-		b.logger.Errorf("Error checking transactions: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Произошла ошибка при проверке транзакций.")
-		msg.ReplyMarkup = GetMainMenu(true)
-		b.API.Send(msg)
-		return
-	}
-
-	if len(transactions) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "На вашем адресе пока нет новых транзакций.")
-		msg.ReplyMarkup = GetMainMenu(true)
-		b.API.Send(msg)
-		return
-	}
-
-	response := "📊 Найдены транзакции:\n\n"
-	for _, tx := range transactions {
-		response += fmt.Sprintf("• %.8f BTC - %s\n", tx.AmountBTC, tx.TxID)
-	}
-
-	msg = tgbotapi.NewMessage(chatID, response)
-	msg.ReplyMarkup = GetMainMenu(true)
-	b.API.Send(msg)
 }
 
 func (b *Bot) handleStart(ctx context.Context, chatID, userID int64, hasAddress bool) {
@@ -117,31 +76,22 @@ func (b *Bot) handleStart(ctx context.Context, chatID, userID int64, hasAddress 
 }
 
 func (b *Bot) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
-	// Проверяем, что это наш callback
 	if strings.HasPrefix(callback.Data, "show_key:") {
-		// Извлекаем walletID из callback данных
-
-		masterKey := b.config.MasterKeySeed
 		address := strings.TrimPrefix(callback.Data, "show_key:")
-		params := &chaincfg.TestNet3Params
-
-		privateAddrKey, err := utils.GetAddressPrivateKey(masterKey, address, params)
+		privateAddrKey, err := utils.GetAddressPrivateKey(b.config.MasterKeySeed, address, &chaincfg.TestNet3Params)
 		if err != nil {
 			b.logger.Errorf("Failed to get private key: %v", err)
 			return
 		}
-		// Формируем ответ с приватными данными
-		response := fmt.Sprintf("🔐 Данные кошелька:\n\nАдрес: %s\nПриватный ключ: %s",
-			address,
-			privateAddrKey)
 
-		// Отправляем ответ
+		response := fmt.Sprintf("🔐 Данные кошелька:\n\nАдрес: %s\nПриватный ключ: %s",
+			address, privateAddrKey)
+
 		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, response)
 		if _, err := b.API.Send(msg); err != nil {
 			b.logger.Errorf("Failed to send wallet info: %v", err)
 		}
 
-		// Удаляем кнопку из оригинального сообщения
 		edit := tgbotapi.NewEditMessageReplyMarkup(
 			callback.Message.Chat.ID,
 			callback.Message.MessageID,
@@ -151,7 +101,6 @@ func (b *Bot) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
 			b.logger.Errorf("Failed to remove button: %v", err)
 		}
 
-		// Подтверждаем обработку callback
 		callbackConfig := tgbotapi.NewCallback(callback.ID, "")
 		if _, err := b.API.Request(callbackConfig); err != nil {
 			b.logger.Errorf("Failed to answer callback: %v", err)
