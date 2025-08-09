@@ -37,6 +37,6 @@ func main() {
 		logger.Fatal("Failed to create bot API: ", err)
 	}
 
-	bot := bot.NewBot(telegramBot, userService, logger)
+	bot := bot.NewBot(telegramBot, userService, logger, &cfg)
 	bot.Start()
 }

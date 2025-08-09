@@ -32,12 +32,12 @@ func GetAddressPrivateKey(masterKeyStr string, targetAddress string, params *cha
 		if address.String() == targetAddress {
 			privKey, err := childKey.ECPrivKey()
 			if err != nil {
-				log.Fatalf("Ошибка получения приватного ключа: %v", err)
+				log.Printf("Ошибка получения приватного ключа: %v", err)
 			}
 
 			wif, err := btcutil.NewWIF(privKey, params, true)
 			if err != nil {
-				log.Fatalf("Ошибка создания WIF: %v", err)
+				log.Printf("Ошибка создания WIF: %v", err)
 			}
 
 			fmt.Printf("Найден адрес!\nИндекс: %d\nПриватный ключ (WIF): %s\n", i, wif.String())
