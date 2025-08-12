@@ -11,13 +11,8 @@ import (
 )
 
 const (
-	withdrawalsPerPage  = 5
-	adminCommissionRate = 0.06
+	withdrawalsPerPage = 5
 )
-
-func applyAdminCommission(amount float64) float64 {
-	return amount * (1 - adminCommissionRate)
-}
 
 // --- Логика вывода для пользователя (без изменений) ---
 
@@ -118,19 +113,17 @@ func (b *Bot) handleUserWithdrawCallback(ctx context.Context, callback *tgbotapi
 	}
 }
 
-// --- Уведомления для Админа (с комиссией) ---
+// --- Уведомления для Админа (без комиссии) ---
 
 func (b *Bot) notifyAdminAboutWithdrawal(withdrawal *models.Withdrawal) {
-	amountToPay := applyAdminCommission(withdrawal.Amount)
 	msg := fmt.Sprintf(
 		"🆕 Новый запрос на вывод #%d\n\n"+
 			"👤 Пользователь: `%d`\n"+
 			"💳 Карта: `%s`\n"+
-			"💰 Сумма к выплате: `%.8f` RUB (запрошено: `%.8f` RUB)",
+			"💰 Сумма: `%.8f` RUB",
 		withdrawal.ID,
 		withdrawal.UserID,
 		withdrawal.CardNumber,
-		amountToPay,
 		withdrawal.Amount,
 	)
 	adminMsg := tgbotapi.NewMessage(b.config.AdminChatID, msg)
@@ -139,26 +132,24 @@ func (b *Bot) notifyAdminAboutWithdrawal(withdrawal *models.Withdrawal) {
 }
 
 func (b *Bot) notifyAdminAboutUpdatedWithdrawal(withdrawal *models.Withdrawal, addedAmount float64) {
-	adjustedAdded := applyAdminCommission(addedAmount)
-	adjustedTotal := applyAdminCommission(withdrawal.Amount)
 	msg := fmt.Sprintf(
 		"🔄 Сумма в запросе #%d обновлена\n\n"+
 			"👤 Пользователь: `%d`\n"+
 			"💳 Карта: `%s`\n\n"+
-			"💰 Добавлено к выплате: `%.8f` RUB\n"+
-			"💰 *Итоговая сумма к выплате: `%.8f` RUB*",
+			"💰 Добавлено к выводу: `%.8f` RUB\n"+
+			"💰 *Итоговая сумма к выводу: `%.8f` RUB*",
 		withdrawal.ID,
 		withdrawal.UserID,
 		withdrawal.CardNumber,
-		adjustedAdded,
-		adjustedTotal,
+		addedAmount,
+		withdrawal.Amount,
 	)
 	adminMsg := tgbotapi.NewMessage(b.config.AdminChatID, msg)
 	adminMsg.ParseMode = tgbotapi.ModeMarkdown
 	b.API.Send(adminMsg)
 }
 
-// --- Логика вывода для админа (БЕЗ общей суммы) ---
+// --- Логика вывода для админа (без комиссии) ---
 
 func (b *Bot) handleWithdrawalRequests(ctx context.Context, chatID int64, user *models.User) {
 	withdrawals, err := b.service.GetPendingWithdrawals(ctx)
@@ -171,7 +162,6 @@ func (b *Bot) handleWithdrawalRequests(ctx context.Context, chatID int64, user *
 		b.sendMessage(chatID, "ℹ️ Нет ожидающих запросов на вывод.", nil)
 		return
 	}
-	// Просто отправляем первую страницу без подсчета общей суммы
 	b.sendWithdrawalsPage(ctx, chatID, withdrawals, 0)
 }
 
@@ -190,13 +180,12 @@ func (b *Bot) sendWithdrawalsPage(ctx context.Context, chatID int64, withdrawals
 
 	for i := start; i < end; i++ {
 		w := withdrawals[i]
-		amountToPay := applyAdminCommission(w.Amount)
 		sb.WriteString(fmt.Sprintf(
-			"🆔 ID: %d\n👤 Пользователь: %d\n💳 Карта: %s\n💰 Сумма к выплате: `%.8f` RUB\n\n",
+			"🆔 ID: %d\n👤 Пользователь: %d\n💳 Карта: %s\n💰 Сумма: `%.8f` RUB\n\n",
 			w.ID,
 			w.UserID,
 			w.CardNumber,
-			amountToPay,
+			w.Amount,
 		))
 	}
 	keyboardRows := make([][]tgbotapi.InlineKeyboardButton, 0)
@@ -234,13 +223,11 @@ func (b *Bot) handleAdminWithdrawCallback(ctx context.Context, callback *tgbotap
 			b.logger.Errorf("Invalid page number in callback: %v", err)
 			return
 		}
-
 		withdrawals, err := b.service.GetPendingWithdrawals(ctx)
 		if err != nil {
 			b.logger.Errorf("Failed to get pending withdrawals: %v", err)
 			return
 		}
-
 		b.sendWithdrawalsPage(ctx, callback.Message.Chat.ID, withdrawals, page)
 		b.answerCallback(callback.ID, "")
 		return
@@ -252,7 +239,6 @@ func (b *Bot) handleAdminWithdrawCallback(ctx context.Context, callback *tgbotap
 			b.logger.Errorf("Invalid withdrawal ID in callback: %v", err)
 			return
 		}
-
 		confirmText := "Вы уверены, что хотите подтвердить этот вывод? Это действие необратимо."
 		confirmKeyboard := tgbotapi.NewInlineKeyboardMarkup(
 			tgbotapi.NewInlineKeyboardRow(
@@ -263,7 +249,6 @@ func (b *Bot) handleAdminWithdrawCallback(ctx context.Context, callback *tgbotap
 				tgbotapi.NewInlineKeyboardButtonData("❌ Отмена", "admin_cancel_action"),
 			),
 		)
-
 		edit := tgbotapi.NewEditMessageTextAndMarkup(
 			callback.Message.Chat.ID,
 			callback.Message.MessageID,
@@ -281,14 +266,12 @@ func (b *Bot) handleAdminWithdrawCallback(ctx context.Context, callback *tgbotap
 			b.logger.Errorf("Invalid withdrawal ID in callback: %v", err)
 			return
 		}
-
 		err = b.processWithdrawal(ctx, withdrawID)
 		if err != nil {
 			b.logger.Errorf("Failed to process withdrawal %d: %v", withdrawID, err)
 			b.answerCallback(callback.ID, "❌ Ошибка обработки вывода: "+err.Error())
 			return
 		}
-
 		deleteMsg := tgbotapi.NewDeleteMessage(callback.Message.Chat.ID, callback.Message.MessageID)
 		b.API.Send(deleteMsg)
 		b.answerCallback(callback.ID, "✅ Вывод успешно обработан и удален.")
@@ -306,6 +289,7 @@ func (b *Bot) handleAdminWithdrawCallback(ctx context.Context, callback *tgbotap
 	}
 }
 
+// --- ОСНОВНАЯ ИЗМЕНЕННАЯ ФУНКЦИЯ ---
 func (b *Bot) processWithdrawal(ctx context.Context, withdrawID int64) error {
 	withdrawal, err := b.service.GetWithdrawalByID(ctx, withdrawID)
 	if err != nil {
@@ -326,30 +310,44 @@ func (b *Bot) processWithdrawal(ctx context.Context, withdrawID int64) error {
 		return fmt.Errorf("пользователь для заявки не найден")
 	}
 
-	if user.Balance < withdrawal.Amount {
-		b.sendMessage(b.config.AdminChatID, fmt.Sprintf("‼️ ВНИМАНИЕ: Недостаточно средств для вывода #%d. Баланс пользователя: %.8f RUB, требуется: %.8f RUB.", withdrawID, user.Balance, withdrawal.Amount), nil)
+	// Рассчитываем сумму для списания по формуле: Y / 1.11 * 1.06
+	// где Y - это withdrawal.Amount
+	amountToDeduct := (withdrawal.Amount / 1.11) * 1.06
+
+	// Проверяем, достаточно ли на балансе средств для фактического списания
+	if user.Balance < amountToDeduct {
+		errorMsg := fmt.Sprintf(
+			"‼️ ВНИМАНИЕ: Недостаточно средств для вывода #%d. "+
+				"Баланс пользователя: %.8f RUB, требуется для списания: %.8f RUB.",
+			withdrawID, user.Balance, amountToDeduct,
+		)
+		b.sendMessage(b.config.AdminChatID, errorMsg, nil)
 		return fmt.Errorf("недостаточно средств на балансе пользователя")
 	}
 
-	newBalance := user.Balance - withdrawal.Amount
+	// Рассчитываем новый баланс пользователя
+	newBalance := user.Balance - amountToDeduct
 	err = b.service.UpdateUserBalance(ctx, user.TelegramID, newBalance)
 	if err != nil {
 		return fmt.Errorf("не удалось обновить баланс пользователя: %v", err)
 	}
 
+	// Удаляем заявку на вывод после успешного списания
 	err = b.service.DeleteWithdrawal(ctx, withdrawID)
 	if err != nil {
+		// КРИТИЧЕСКАЯ ОШИБКА: Баланс списан, но заявка не удалена. Требуется ручное вмешательство.
 		b.logger.Errorf("CRITICAL: User balance updated for withdrawal %d, but failed to delete the withdrawal record: %v", withdrawID, err)
 		return fmt.Errorf("не удалось удалить заявку после списания баланса: %v", err)
 	}
 
+	// Уведомляем пользователя об успехе операции
 	userMsg := fmt.Sprintf(
 		"✅ Ваш вывод на сумму `%.8f` RUB (карта `%s`) успешно обработан!",
 		withdrawal.Amount,
 		withdrawal.CardNumber,
 	)
 
-	user.Balance = newBalance
+	user.Balance = newBalance // Обновляем баланс в локальной модели для передачи в GetMainMenu
 	b.sendMessage(user.TelegramID, userMsg, GetMainMenu(user))
 
 	return nil
