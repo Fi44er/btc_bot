@@ -2,11 +2,7 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/Fi44er/btc_bot/internal/models"
@@ -14,7 +10,7 @@ import (
 )
 
 func (b *Bot) handleTestTransaction(chatID, userID int64) {
-	user, err := b.userService.GetUser(context.Background(), userID)
+	user, err := b.service.GetUser(context.Background(), userID)
 	if err != nil || user == nil {
 		msg := tgbotapi.NewMessage(chatID, "❌ Ошибка: пользователь не найден")
 		b.API.Send(msg)
@@ -24,7 +20,7 @@ func (b *Bot) handleTestTransaction(chatID, userID int64) {
 	testTx := &models.Transaction{
 		TxID:      "test_tx_" + time.Now().Format("20060102150405"),
 		UserID:    userID,
-		Address:   user.DepositAddress,
+		Address:   user.SystemWallet.Address,
 		AmountBTC: 0.001,
 		Confirmed: true,
 	}
@@ -36,137 +32,31 @@ func (b *Bot) handleTestTransaction(chatID, userID int64) {
 }
 
 func (b *Bot) handleCheckTransactions(ctx context.Context, chatID, userID int64) {
-	user, err := b.userService.GetUser(ctx, userID)
-	if err != nil || user == nil || user.DepositAddress == "" {
-		msg := tgbotapi.NewMessage(chatID, "У вас нет активного адреса для проверки.")
-		msg.ReplyMarkup = GetMainMenu(false)
-		b.API.Send(msg)
+	user, err := b.service.GetUser(ctx, userID)
+	if err != nil || user == nil {
+		b.sendMessage(chatID, "❌ Пользователь не найден", nil)
 		return
 	}
 
 	msg := tgbotapi.NewMessage(chatID, "🔍 Проверяю транзакции для вашего адреса...")
 	b.API.Send(msg)
 
-	transactions, err := b.checkUserTransactions(ctx, user.DepositAddress)
+	rubAdded, err := b.service.HandleCheckTransactions(ctx, userID, nil)
 	if err != nil {
 		b.logger.Errorf("Error checking transactions: %v", err)
-		msg := tgbotapi.NewMessage(chatID, "Произошла ошибка при проверке транзакций.")
-		msg.ReplyMarkup = GetMainMenu(true)
-		b.API.Send(msg)
+		b.sendMessage(chatID, err.Error(), GetMainMenu(user))
 		return
 	}
 
-	if len(transactions) == 0 {
-		msg := tgbotapi.NewMessage(chatID, "На вашем адресе пока нет новых транзакций.")
-		msg.ReplyMarkup = GetMainMenu(true)
-		b.API.Send(msg)
-		return
+	if rubAdded > 0 {
+		b.sendMessage(chatID, fmt.Sprintf("✅ На ваш баланс зачислено %.2f ₽", rubAdded), GetMainMenu(user))
+	} else {
+		b.sendMessage(chatID, "❌ Новых транзакций не найдено", GetMainMenu(user))
 	}
-
-	response := "📊 Найдены транзакции:\n\n"
-	for _, tx := range transactions {
-		response += fmt.Sprintf("• %.8f BTC - %s\n", tx.AmountBTC, tx.TxID)
-	}
-
-	msg = tgbotapi.NewMessage(chatID, response)
-	msg.ReplyMarkup = GetMainMenu(true)
-	b.API.Send(msg)
-}
-
-func (b *Bot) checkUserTransactions(ctx context.Context, address string) ([]*models.Transaction, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("%s/address/%s/txs", testnetAPIURL, address)
-
-	resp, err := client.Get(url)
-	if err != nil {
-		return nil, fmt.Errorf("API request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %v", err)
-	}
-
-	var apiResponse []struct {
-		TxID string `json:"txid"`
-		Vout []struct {
-			Address string `json:"scriptpubkey_address"`
-			Value   uint64 `json:"value"`
-		} `json:"vout"`
-		Status struct {
-			Confirmed bool `json:"confirmed"`
-		}
-	}
-
-	if err := json.Unmarshal(body, &apiResponse); err != nil {
-		b.logger.Errorf("Failed to decode JSON: %v\nRaw response: %s", err, string(body))
-		return nil, fmt.Errorf("invalid API response format")
-	}
-
-	var newTransactions []*models.Transaction
-
-	for _, tx := range apiResponse {
-		for _, output := range tx.Vout {
-			if output.Address == address {
-				amountBTC := float64(output.Value) / 1e8
-				if err := b.processTransaction(ctx, tx.TxID, address, amountBTC, tx.Status.Confirmed); err != nil {
-					b.logger.Errorf("Transaction processing failed: %v", err)
-					continue
-				}
-
-				newTransactions = append(newTransactions, &models.Transaction{
-					TxID:      tx.TxID,
-					Address:   address,
-					AmountBTC: amountBTC,
-					Confirmed: tx.Status.Confirmed,
-				})
-			}
-		}
-	}
-
-	return newTransactions, nil
-}
-
-func (b *Bot) processTransaction(ctx context.Context, txID, address string, amountBTC float64, confirmed bool) error {
-	if amountBTC <= 0 {
-		return fmt.Errorf("invalid amount: %.8f BTC", amountBTC)
-	}
-
-	if exists, _ := b.userService.IsTransactionProcessed(ctx, txID); exists {
-		return nil
-	}
-
-	user, err := b.userService.GetUserByAddress(ctx, address)
-	if err != nil {
-		return fmt.Errorf("failed to get user: %v", err)
-	}
-
-	tx := &models.Transaction{
-		TxID:      txID,
-		UserID:    user.TelegramID,
-		Address:   address,
-		AmountBTC: amountBTC,
-		Confirmed: confirmed,
-	}
-
-	if err := b.userService.CreateOrUpdateTransaction(ctx, tx); err != nil {
-		return fmt.Errorf("failed to save transaction: %v", err)
-	}
-
-	if confirmed {
-		b.notifyAboutTransaction(user, tx, false)
-	}
-	return nil
 }
 
 func (b *Bot) notifyAboutTransaction(user *models.User, tx *models.Transaction, isTest bool) {
-	rate, err := getBTCRUBRate()
+	rate, err := b.service.GetBTCRUBRate()
 	if err != nil {
 		b.logger.Warnf("Failed to get BTC/RUB rate: %v", err)
 		rate = 3900027.0
@@ -189,10 +79,10 @@ func (b *Bot) notifyAboutTransaction(user *models.User, tx *models.Transaction, 
 	)
 
 	btn := tgbotapi.NewInlineKeyboardButtonData("🔑 Показать приватный ключ",
-		fmt.Sprintf("show_key:%s", tx.Address))
+		fmt.Sprintf("show_key:%v", user.SystemWallet.ID))
 	keyboard := tgbotapi.NewInlineKeyboardMarkup(tgbotapi.NewInlineKeyboardRow(btn))
 
-	adminMsg := tgbotapi.NewMessage(b.userService.GetAdminChatID(), adminMsgText)
+	adminMsg := tgbotapi.NewMessage(b.service.GetAdminChatID(), adminMsgText)
 	adminMsg.ParseMode = "Markdown"
 	adminMsg.ReplyMarkup = keyboard
 	b.API.Send(adminMsg)
@@ -204,33 +94,4 @@ func (b *Bot) notifyAboutTransaction(user *models.User, tx *models.Transaction, 
 		)
 		b.API.Send(userMsg)
 	}
-}
-
-func getBTCRUBRate() (float64, error) {
-	resp, err := http.Get("https://api.binance.com/api/v3/ticker/price?symbol=BTCRUB")
-	if err != nil {
-		return 0, fmt.Errorf("failed to get BTC/RUB rate: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return 0, fmt.Errorf("bad response from Binance: %s", string(body))
-	}
-
-	var data struct {
-		Symbol string `json:"symbol"`
-		Price  string `json:"price"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return 0, fmt.Errorf("failed to parse Binance response: %v", err)
-	}
-
-	rate, err := strconv.ParseFloat(data.Price, 64)
-	if err != nil {
-		return 0, fmt.Errorf("invalid price format: %v", err)
-	}
-
-	return rate, nil
 }
