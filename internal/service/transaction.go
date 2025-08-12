@@ -60,6 +60,10 @@ func (s *Service) HandleCheckTransactions(ctx context.Context, userID int64, _ m
 		rate = 3900027.0
 	}
 
+	s.logger.Warnf("RATE: %v", rate)
+	s.logger.Warnf("totalBTC: %v", totalBTC)
+	s.logger.Warnf("total rub: %v", totalBTC*rate)
+
 	totalRUB := totalBTC * rate
 	userModel := models.User{
 		TelegramID:     user.TelegramID,
