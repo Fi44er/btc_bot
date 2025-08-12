@@ -26,8 +26,8 @@ func main() {
 		logger.Fatal(err)
 	}
 
-	repo := repository.NewRepository(database)
-	userService, err := service.NewUserService(repo, cfg.MasterKeySeed, cfg.AdminChatID)
+	repo := repository.NewRepository(database, logger)
+	userService, err := service.NewUserService(repo, cfg.MasterKeySeed, cfg.AdminChatID, &cfg, logger)
 	if err != nil {
 		logger.Fatal("Failed to create user service: ", err)
 	}

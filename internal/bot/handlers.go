@@ -3,179 +3,171 @@ package bot
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
+	"github.com/Fi44er/btc_bot/internal/models"
 	"github.com/Fi44er/btc_bot/utils"
-	"github.com/btcsuite/btcd/chaincfg"
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 func (b *Bot) HandleUpdate(update tgbotapi.Update) {
-	ctx := context.Background()
-	userID := update.Message.From.ID
-	chatID := update.Message.Chat.ID
-	text := update.Message.Text
+	b.withUserCheck(func(ctx context.Context, update tgbotapi.Update, user *models.User) {
+		text := update.Message.Text
+		chatID := update.Message.Chat.ID
+		userID := user.TelegramID
 
-	b.logger.Infof("Processing message from user %d: %s", userID, text)
+		b.logger.Infof("Processing message from user %d: %s", userID, text)
 
-	user, err := b.userService.GetUser(ctx, userID)
-	if err != nil {
-		b.logger.Errorf("Failed to get user: %v", err)
-		return
-	}
+		userState := b.getUserState(userID)
 
-	hasAddress := user != nil && user.DepositAddress != ""
-	userState := b.getUserState(userID)
-
-	if userState == stateAwaitingCardNumber {
-		b.HandleCardNumberInput(ctx, update)
-		return
-	}
-
-	switch text {
-	case "/test_tx":
-		b.handleTestTransaction(update.Message.Chat.ID, update.Message.From.ID)
-	case "/start":
-		b.handleStart(ctx, chatID, userID, hasAddress)
-	case "💰 Получить адрес для пополнения":
-		b.handleAddressRequest(ctx, chatID, userID)
-	case "💳 Указать номер карты":
-		b.setState(userID, stateAwaitingCardNumber)
-		msg := tgbotapi.NewMessage(chatID, "Пожалуйста, отправьте номер вашей карты:")
-		msg.ReplyMarkup = tgbotapi.NewRemoveKeyboard(true)
-		b.API.Send(msg)
-	case "🔄 Проверить статус транзакции":
-		b.handleCheckTransactions(ctx, chatID, userID)
-	default:
-		msg := tgbotapi.NewMessage(chatID, "Неизвестная команда. Используйте меню.")
-		msg.ReplyMarkup = GetMainMenu(hasAddress)
-		b.API.Send(msg)
-	}
-}
-
-func (b *Bot) handleStart(ctx context.Context, chatID, userID int64, hasAddress bool) {
-	user, err := b.userService.GetUser(ctx, userID)
-	if err != nil {
-		b.logger.Errorf("Failed to get user: %v", err)
-	}
-
-	welcomeText := "Добро пожаловать! Используйте меню для работы с ботом:"
-
-	if user == nil || user.CardNumber == "" {
-		welcomeText += "\n\n1. Сначала укажите номер карты"
-		welcomeText += "\n2. Затем получите адрес для пополнения"
-	} else if !hasAddress {
-		welcomeText += "\n\nТеперь вы можете получить адрес для пополнения"
-	} else {
-		welcomeText += "\n\nВы можете проверять статус транзакций"
-	}
-
-	msg := tgbotapi.NewMessage(chatID, welcomeText)
-	msg.ReplyMarkup = GetMainMenu(hasAddress)
-	b.API.Send(msg)
-}
-
-func (b *Bot) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
-	if strings.HasPrefix(callback.Data, "show_key:") {
-		address := strings.TrimPrefix(callback.Data, "show_key:")
-		privateAddrKey, err := utils.GetAddressPrivateKey(b.config.MasterKeySeed, address, &chaincfg.TestNet3Params)
-		if err != nil {
-			b.logger.Errorf("Failed to get private key: %v", err)
+		switch userState {
+		case stateAwaitingCardNumber:
+			b.HandleCardNumberInput(ctx, update, user)
+			return
+		case stateAwaitingWithdrawAmount:
+			b.handleWithdrawAmount(ctx, chatID, user, text)
 			return
 		}
 
-		response := fmt.Sprintf("🔐 Данные кошелька:\n\nАдрес: %s\nПриватный ключ: %s",
-			address, privateAddrKey)
+		// Добавляем в модель User поле IsAdmin, чтобы не вызывать b.isAdmin постоянно
+		user.IsAdmin = b.isAdmin(userID)
 
-		msg := tgbotapi.NewMessage(callback.Message.Chat.ID, response)
-		if _, err := b.API.Send(msg); err != nil {
-			b.logger.Errorf("Failed to send wallet info: %v", err)
+		switch text {
+		case "/test_tx":
+			b.handleTestTransaction(chatID, userID)
+		case "/start":
+			b.handleStart(ctx, chatID, user)
+		case "💰 Получить адрес для пополнения":
+			b.handleAddressRequest(ctx, chatID, user)
+		case "💳 Указать номер карты", "💳 Изменить номер карты":
+			b.setState(userID, stateAwaitingCardNumber)
+			// Удаляем старое меню перед запросом ввода
+			b.sendMessage(chatID, "Пожалуйста, отправьте номер вашей карты:", tgbotapi.NewRemoveKeyboard(true))
+		case "🔄 Проверить статус транзакции":
+			b.handleCheckTransactions(ctx, chatID, userID)
+		case "📊 Посмотреть баланс":
+			b.handleBalanceRequest(ctx, chatID, user)
+		case "💸 Вывести средства":
+			b.handleWithdrawRequest(ctx, chatID, user)
+		case "👨‍💻 Запросы на вывод":
+			if b.isAdmin(userID) {
+				b.handleWithdrawalRequests(ctx, chatID, user)
+			}
+		default:
+			b.sendMessage(chatID, "Неизвестная команда. Используйте меню.", GetMainMenu(user))
 		}
-
-		edit := tgbotapi.NewEditMessageReplyMarkup(
-			callback.Message.Chat.ID,
-			callback.Message.MessageID,
-			tgbotapi.InlineKeyboardMarkup{InlineKeyboard: [][]tgbotapi.InlineKeyboardButton{}},
-		)
-		if _, err := b.API.Send(edit); err != nil {
-			b.logger.Errorf("Failed to remove button: %v", err)
-		}
-
-		callbackConfig := tgbotapi.NewCallback(callback.ID, "")
-		if _, err := b.API.Request(callbackConfig); err != nil {
-			b.logger.Errorf("Failed to answer callback: %v", err)
-		}
-	}
+	})(update)
 }
 
-func (b *Bot) handleAddressRequest(ctx context.Context, chatID, userID int64) {
-	user, err := b.userService.GetUser(ctx, userID)
-	if err != nil {
-		b.logger.Errorf("Failed to get user: %v", err)
-		b.API.Send(tgbotapi.NewMessage(chatID, "Произошла ошибка. Попробуйте позже."))
+func (b *Bot) handleStart(ctx context.Context, chatID int64, user *models.User) {
+	welcomeText := "Добро пожаловать! Используйте меню для работы с ботом."
+	// Отправляем приветствие и всегда показываем актуальное меню
+	b.sendMessage(chatID, welcomeText, GetMainMenu(user))
+}
+
+func (b *Bot) handleAddressRequest(ctx context.Context, chatID int64, user *models.User) {
+	if user.CardNumber == "" {
+		b.sendMessage(
+			chatID,
+			"❌ Для получения адреса пополнения необходимо сначала указать номер карты.",
+			GetMainMenu(user),
+		)
 		return
 	}
 
-	if user == nil || user.CardNumber == "" {
-		msg := tgbotapi.NewMessage(chatID, "❌ Для получения адреса пополнения необходимо сначала указать номер карты.\n\n"+
-			"Пожалуйста, нажмите кнопку '💳 Указать номер карты' и следуйте инструкциям.")
-		msg.ReplyMarkup = GetMainMenu(false)
-		b.API.Send(msg)
-		return
-	}
-
-	userWithAddress, err := b.userService.UpdateAddress(ctx, userID)
+	userWithAddress, err := b.service.UpdateUserWallet(ctx, user.TelegramID)
 	if err != nil {
 		b.logger.Errorf("Failed to get user address: %v", err)
-		b.API.Send(tgbotapi.NewMessage(chatID, "Не удалось сгенерировать адрес. Попробуйте позже."))
+		b.sendMessage(chatID, "Не удалось сгенерировать адрес. Попробуйте позже.", GetMainMenu(user))
 		return
 	}
 
 	msgText := fmt.Sprintf(
 		"Ваш уникальный адрес для пополнения:\n\n`%s`\n\n"+
 			"Отправляйте BTC только на этот адрес. Любое поступление на него будет зачислено на ваш баланс.",
-		userWithAddress.DepositAddress,
+		userWithAddress.SystemWallet.Address,
 	)
-	msg := tgbotapi.NewMessage(chatID, msgText)
-	msg.ParseMode = "Markdown"
-	msg.ReplyMarkup = GetMainMenu(true)
-	b.API.Send(msg)
+
+	// Отправляем сообщение и снова показываем меню
+	b.sendMessage(chatID, msgText, GetMainMenu(userWithAddress))
 }
 
-func (b *Bot) HandleCardNumberInput(ctx context.Context, update tgbotapi.Update) {
-	userID := update.Message.From.ID
-	chatID := update.Message.Chat.ID
-
-	user, err := b.userService.GetUser(ctx, userID)
-	if err != nil {
-		b.logger.Errorf("Failed to get user: %v", err)
+// handleCallbackQuery теперь является маршрутизатором для колбэков
+func (b *Bot) handleCallbackQuery(callback *tgbotapi.CallbackQuery) {
+	ctx := context.Background()
+	user, err := b.service.GetUser(ctx, callback.From.ID)
+	if err != nil || user == nil {
+		b.logger.Errorf("Failed to get user for callback: %v", err)
 		return
 	}
+	user.IsAdmin = b.isAdmin(user.TelegramID)
 
-	if user == nil {
-		if err := b.userService.CreateUser(ctx, userID); err != nil {
-			b.logger.Errorf("Failed to create user: %v", err)
-			b.API.Send(tgbotapi.NewMessage(chatID, "Произошла ошибка. Попробуйте позже."))
-			return
+	switch {
+	case strings.HasPrefix(callback.Data, "show_key:"):
+		b.handleShowKeyCallback(ctx, callback, user)
+	case strings.HasPrefix(callback.Data, "confirm_withdraw"), strings.HasPrefix(callback.Data, "cancel_withdraw"):
+		b.handleUserWithdrawCallback(ctx, callback, user)
+	case strings.HasPrefix(callback.Data, "admin_"):
+		if user.IsAdmin {
+			b.handleAdminWithdrawCallback(ctx, callback)
 		}
 	}
+}
 
-	if err := b.userService.UpdateCardNumber(ctx, userID, update.Message.Text); err != nil {
+func (b *Bot) HandleCardNumberInput(ctx context.Context, update tgbotapi.Update, user *models.User) {
+	chatID := update.Message.Chat.ID
+	userID := user.TelegramID
+	cardNumber := update.Message.Text
+
+	if err := b.service.UpdateCardNumber(ctx, userID, cardNumber); err != nil {
 		b.logger.Errorf("Failed to update card number: %v", err)
-		b.API.Send(tgbotapi.NewMessage(chatID, "Ошибка сохранения номера карты. Попробуйте позже."))
+		// Возвращаем главное меню даже в случае ошибки
+		b.sendMessage(chatID, "Ошибка сохранения номера карты. Попробуйте позже.", GetMainMenu(user))
 		return
 	}
 
-	user, err = b.userService.GetUser(ctx, userID)
-	if err != nil {
-		b.logger.Errorf("Failed to get user: %v", err)
-		return
-	}
-
-	hasAddress := user != nil && user.DepositAddress != ""
-
+	// Сбрасываем состояние пользователя
 	b.setState(userID, stateDefault)
-	msg := tgbotapi.NewMessage(chatID, "✅ Номер карты сохранен!")
-	msg.ReplyMarkup = GetMainMenu(hasAddress)
+
+	// Обновляем данные пользователя в текущем объекте, чтобы меню было актуальным
+	user.CardNumber = cardNumber
+
+	// Отправляем подтверждение и следом сообщение с главным меню
+	b.sendMessage(chatID, "✅ Номер карты сохранен!", nil)
+	b.sendMessage(chatID, "Выберите действие в меню:", GetMainMenu(user))
+}
+
+func (b *Bot) handleBalanceRequest(_ context.Context, chatID int64, user *models.User) {
+	balance := utils.RoundTo(user.Balance, 8) // Увеличил точность для BTC
+	msgText := fmt.Sprintf("Ваш текущий баланс: %.8f RUB", balance)
+	b.sendMessage(chatID, msgText, GetMainMenu(user))
+}
+
+// handleShowKeyCallback обрабатывает запрос на показ приватного ключа
+func (b *Bot) handleShowKeyCallback(ctx context.Context, callback *tgbotapi.CallbackQuery, user *models.User) {
+	walletIDStr := strings.TrimPrefix(callback.Data, "show_key:")
+	walletID, err := strconv.ParseInt(walletIDStr, 10, 64)
+	if err != nil {
+		b.logger.Errorf("Invalid wallet ID in callback: %v", err)
+		return
+	}
+
+	wallet, err := b.service.GetWalletByID(ctx, walletID)
+	if err != nil || wallet == nil {
+		b.logger.Errorf("Failed to get wallet: %v", err)
+		b.answerCallback(callback.ID, "Не удалось найти кошелек.")
+		return
+	}
+
+	response := fmt.Sprintf("🔐 Данные кошелька:\n\nАдрес: `%s`\nПриватный ключ: `%s`", wallet.Address, wallet.PrivateKey)
+	msg := tgbotapi.NewMessage(callback.Message.Chat.ID, response)
+	msg.ParseMode = tgbotapi.ModeMarkdown
 	b.API.Send(msg)
+
+	// Убираем инлайн-кнопку из сообщения
+	edit := tgbotapi.NewEditMessageReplyMarkup(callback.Message.Chat.ID, callback.Message.MessageID, tgbotapi.InlineKeyboardMarkup{})
+	b.API.Send(edit)
+
+	b.answerCallback(callback.ID, "Приватный ключ показан.")
 }
