@@ -94,23 +94,18 @@ func (r *Repository) UpdateWithdrawalStatus(ctx context.Context, id int64, statu
 	return nil
 }
 
-// GetPendingWithdrawalByUserID ищет один активный (статус 'pending') запрос на вывод для пользователя.
 func (r *Repository) GetPendingWithdrawalByUserID(ctx context.Context, userID int64) (*models.Withdrawal, error) {
 	var withdrawal models.Withdrawal
 
-	// Ищем запись, где user_id совпадает и статус 'pending'
 	err := r.db.WithContext(ctx).
 		Where("user_id = ? AND status = ?", userID, "pending").
 		First(&withdrawal).
 		Error
 
 	if err != nil {
-		// Если запись не найдена - это не ошибка, а ожидаемое поведение.
-		// Сервис будет знать, что нужно создать новую запись, а не обновлять.
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
-		// Любая другая ошибка является системной.
 		r.logger.Errorf("ошибка получения ожидающего вывода из БД для пользователя %d: %v", userID, err)
 		return nil, fmt.Errorf("ошибка БД при поиске вывода: %w", err)
 	}
@@ -118,9 +113,7 @@ func (r *Repository) GetPendingWithdrawalByUserID(ctx context.Context, userID in
 	return &withdrawal, nil
 }
 
-// DeleteWithdrawal физически удаляет запись о выводе из таблицы по ее ID.
 func (r *Repository) DeleteWithdrawal(ctx context.Context, id int64) error {
-	// GORM позволяет удалить запись, передав модель и ее ID
 	tx := r.db.WithContext(ctx).Delete(&models.Withdrawal{}, id)
 
 	if tx.Error != nil {
@@ -128,8 +121,6 @@ func (r *Repository) DeleteWithdrawal(ctx context.Context, id int64) error {
 		return fmt.Errorf("ошибка БД при удалении вывода: %w", tx.Error)
 	}
 
-	// Важная проверка: если ни одна строка не была затронута, значит,
-	// запись с таким ID не существовала. Это стоит считать ошибкой.
 	if tx.RowsAffected == 0 {
 		return fmt.Errorf("запись о выводе с ID %d не найдена для удаления", id)
 	}
@@ -138,10 +129,7 @@ func (r *Repository) DeleteWithdrawal(ctx context.Context, id int64) error {
 	return nil
 }
 
-// UpdateUserBalance обновляет поле 'balance' у пользователя по его telegram_id.
 func (r *Repository) UpdateUserBalance(ctx context.Context, userID int64, newBalance float64) error {
-	// Используем Model(...).Where(...).Update(...) для целевого обновления одного поля.
-	// Это эффективнее, чем загружать и сохранять весь объект пользователя.
 	tx := r.db.WithContext(ctx).
 		Model(&models.User{}).
 		Where("telegram_id = ?", userID).
@@ -152,7 +140,6 @@ func (r *Repository) UpdateUserBalance(ctx context.Context, userID int64, newBal
 		return fmt.Errorf("ошибка БД при обновлении баланса: %w", tx.Error)
 	}
 
-	// Также проверяем, что пользователь действительно был найден и обновлен.
 	if tx.RowsAffected == 0 {
 		return fmt.Errorf("пользователь с telegram_id %d не найден для обновления баланса", userID)
 	}

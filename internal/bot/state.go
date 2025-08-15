@@ -4,17 +4,16 @@ import (
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
-// Константы состояний пользователя
 const (
-	stateDefault                = ""
-	stateAwaitingCardNumber     = "awaiting_card_number"
-	stateAwaitingWithdrawAmount = "awaiting_withdraw_amount"
+	stateDefault                            = ""
+	stateAwaitingCardNumber                 = "awaiting_card_number"
+	stateAwaitingWithdrawConfirmationAmount = "awaiting_withdraw_confirmation" // Новое состояние для подтверждения вывода
+	stateAwaitingAdminNickname              = "awaiting_admin_nickname"        // Новое состояние для админа
 )
 
-// sendMessage - унифицированная функция для отправки сообщений.
 func (b *Bot) sendMessage(chatID int64, text string, replyMarkup interface{}) {
 	msg := tgbotapi.NewMessage(chatID, text)
-	msg.ParseMode = tgbotapi.ModeMarkdown // По умолчанию используем Markdown для красивого форматирования
+	msg.ParseMode = tgbotapi.ModeMarkdown
 	if replyMarkup != nil {
 		msg.ReplyMarkup = replyMarkup
 	}
@@ -27,13 +26,11 @@ func (b *Bot) isAdmin(userID int64) bool {
 	return userID == b.config.AdminChatID
 }
 
-// --- Функции для управления состоянием ---
-
 func (b *Bot) setState(userID int64, state string) {
 	b.stateMutex.Lock()
 	defer b.stateMutex.Unlock()
 	if state == stateDefault {
-		delete(b.userStates, userID) // Удаляем состояние, если оно по-умолчанию
+		delete(b.userStates, userID)
 	} else {
 		b.userStates[userID] = state
 	}
@@ -45,8 +42,6 @@ func (b *Bot) getUserState(userID int64) string {
 	defer b.stateMutex.Unlock()
 	return b.userStates[userID]
 }
-
-// --- Функции для управления временными данными ---
 
 func (b *Bot) setUserActionData(userID int64, data string) {
 	b.stateMutex.Lock()
@@ -64,4 +59,11 @@ func (b *Bot) clearUserActionData(userID int64) {
 	b.stateMutex.Lock()
 	defer b.stateMutex.Unlock()
 	delete(b.userActionData, userID)
+}
+
+func (b *Bot) answerCallback(callbackID string, text string) {
+	callback := tgbotapi.NewCallback(callbackID, text)
+	if _, err := b.API.Request(callback); err != nil {
+		b.logger.Errorf("Failed to answer callback: %v", err)
+	}
 }

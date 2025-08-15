@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/Fi44er/btc_bot/config"
 	"github.com/Fi44er/btc_bot/internal/models"
@@ -12,38 +13,25 @@ import (
 
 type IService interface {
 	GetUser(ctx context.Context, userID int64) (*models.User, error)
+	GetUsersWithWallets(ctx context.Context) ([]*models.User, error)
 	CreateUser(ctx context.Context, userID int64) error
 	UpdateCardNumber(ctx context.Context, userID int64, cardNumber string) error
-	HandleCheckTransactions(ctx context.Context, userID int64, _ models.NotifyCallback) (float64, error)
+	HandleCheckTransactions(ctx context.Context, userID int64, notifyCallback models.NotifyCallback) (float64, error)
 	GetAdminChatID() int64
 
 	UpdateUserWallet(ctx context.Context, telegramID int64) (*models.User, error)
 	GetBTCRUBRate() (float64, error)
 
-	GetWalletByID(ctx context.Context, id int64) (*models.SystemWallet, error)
-
-	GetPendingWithdrawals(ctx context.Context) ([]*models.Withdrawal, error)
-	GetWithdrawalByID(ctx context.Context, id int64) (*models.Withdrawal, error)
-	UpdateWithdrawalStatus(ctx context.Context, id int64, status string) error
-
-	GetPendingWithdrawalByUserID(ctx context.Context, userID int64) (*models.Withdrawal, error)
-
-	// НОВЫЙ МЕТОД: Удалить запись о выводе по ID
-	DeleteWithdrawal(ctx context.Context, id int64) error
-
 	UpdateUserBalance(ctx context.Context, userID int64, newBalance float64) error
-	CreateOrUpdateWithdrawal(ctx context.Context, withdrawal *models.Withdrawal) (*models.Withdrawal, bool, error)
 }
 
 type Bot struct {
-	API        *tgbotapi.BotAPI
-	service    IService
-	logger     *utils.Logger
-	config     *config.Config
-	stateMutex *sync.Mutex
-	// Карта для хранения состояний пользователей (например, "ожидание ввода карты")
-	userStates map[int64]string
-	// Карта для хранения временных данных пользователя (например, сумма для вывода)
+	API            *tgbotapi.BotAPI
+	service        IService
+	logger         *utils.Logger
+	config         *config.Config
+	stateMutex     *sync.Mutex
+	userStates     map[int64]string
 	userActionData map[int64]string
 }
 
@@ -66,6 +54,9 @@ func NewBot(
 
 func (b *Bot) Start() {
 	b.logger.Info("Starting bot...")
+
+	go b.startTransactionChecker()
+
 	updates := b.API.GetUpdatesChan(tgbotapi.NewUpdate(0))
 	for update := range updates {
 		b.logger.Debugf("Received update: %+v", update)
@@ -81,10 +72,7 @@ func (b *Bot) Start() {
 
 func GetMainMenu(user *models.User) tgbotapi.ReplyKeyboardMarkup {
 	hasCard := user.CardNumber != ""
-	// Используем метод isAdmin для проверки, а не захардкоженный ID
-	isAdmin := user.IsAdmin
 
-	// Если нет карты - показываем только кнопку для ввода карты
 	if !hasCard {
 		return tgbotapi.NewReplyKeyboard(
 			tgbotapi.NewKeyboardButtonRow(
@@ -93,26 +81,50 @@ func GetMainMenu(user *models.User) tgbotapi.ReplyKeyboardMarkup {
 		)
 	}
 
-	// Полное меню для пользователей с картой
+	// Меню для пользователя с картой.
 	rows := [][]tgbotapi.KeyboardButton{
 		{
 			tgbotapi.NewKeyboardButton("📊 Посмотреть баланс"),
 			tgbotapi.NewKeyboardButton("💳 Изменить номер карты"),
 		},
 		{
-			tgbotapi.NewKeyboardButton("💸 Вывести средства"),
-			tgbotapi.NewKeyboardButton("🔄 Проверить статус транзакции"),
-		},
-		{
 			tgbotapi.NewKeyboardButton("💰 Получить адрес для пополнения"),
+			// Новая кнопка для подтверждения вывода
+			tgbotapi.NewKeyboardButton("✅ Подтвердить вывод"),
 		},
-	}
-
-	if isAdmin {
-		rows = append(rows, []tgbotapi.KeyboardButton{
-			tgbotapi.NewKeyboardButton("👨‍💻 Запросы на вывод"),
-		})
 	}
 
 	return tgbotapi.NewReplyKeyboard(rows...)
+}
+
+func (b *Bot) startTransactionChecker() {
+	ticker := time.NewTicker(10 * time.Minute)
+	defer ticker.Stop()
+
+	b.logger.Info("Transaction checker started")
+
+	for range ticker.C {
+		ctx := context.Background()
+		b.logger.Info("Running scheduled transaction check...")
+
+		users, err := b.service.GetUsersWithWallets(ctx)
+		if err != nil {
+			b.logger.Errorf("Failed to get users with wallets for checking: %v", err)
+			continue
+		}
+
+		if len(users) == 0 {
+			b.logger.Info("No users with wallets to check.")
+			continue
+		}
+
+		b.logger.Infof("Checking transactions for %d users...", len(users))
+		for _, user := range users {
+			_, err := b.service.HandleCheckTransactions(ctx, user.TelegramID, b.notifyAboutTransaction)
+			if err != nil {
+				b.logger.Warnf("Error checking transaction for user %d: %v", user.TelegramID, err)
+			}
+			time.Sleep(1 * time.Second)
+		}
+	}
 }

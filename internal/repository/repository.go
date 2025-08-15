@@ -38,12 +38,3 @@ func (r *Repository) GetUserByAddress(ctx context.Context, address string) (*mod
 
 	return &user, nil
 }
-
-func (r *Repository) GetAllUsersWithAddresses(ctx context.Context) ([]*models.User, error) {
-	var users []*models.User
-	err := r.db.WithContext(ctx).Where("deposit_address IS NOT NULL").Find(&users).Error
-	if err != nil {
-		return nil, err
-	}
-	return users, nil
-}

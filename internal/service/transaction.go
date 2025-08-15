@@ -17,34 +17,26 @@ var (
 	mainnetAPIURL = "https://mempool.space/api"
 )
 
-type processTransaction struct {
-	ctx       context.Context
-	txID      string
-	address   string
-	amountBTC float64
-	confirmed bool
-}
-
-func (s *Service) HandleCheckTransactions(ctx context.Context, userID int64, _ models.NotifyCallback) (float64, error) {
+func (s *Service) HandleCheckTransactions(ctx context.Context, userID int64, notifyCallback models.NotifyCallback) (float64, error) {
+	s.logger.Infof("SERVICE: Starting HandleCheckTransactions for user %d", userID)
 	user, err := s.GetUser(ctx, userID)
-	if err != nil || user == nil || user.SystemWallet == nil {
-		s.logger.Errorf("Error checking transactions: %v", err)
-		return 0, fmt.Errorf("У вас нет активного адреса для проверки.")
+	if err != nil || user == nil || user.SystemWallet == nil || user.SystemWallet.Address == "" {
+		s.logger.Errorf("Cannot check transactions for user %d: user or wallet not found", userID)
+		return 0, fmt.Errorf("у вас нет активного адреса для проверки")
 	}
 
-	transactions, err := s.checkUserTransactions(ctx, user.SystemWallet.Address)
+	newTransactions, err := s.checkUserTransactions(ctx, user, notifyCallback)
 	if err != nil {
-		s.logger.Errorf("Error checking transactions: %v", err)
-		return 0, fmt.Errorf("Произошла ошибка при проверке транзакций.")
+		s.logger.Errorf("Error checking transactions for user %d: %v", userID, err)
+		return 0, fmt.Errorf("произошла ошибка при проверке транзакций")
 	}
 
-	if len(transactions) == 0 {
+	if len(newTransactions) == 0 {
 		return 0, nil
 	}
 
-	// Конвертируем BTC → RUB и пополняем баланс только за новые транзакции
 	totalBTC := 0.0
-	for _, tx := range transactions {
+	for _, tx := range newTransactions {
 		if tx.Confirmed {
 			totalBTC += tx.AmountBTC
 		}
@@ -57,30 +49,29 @@ func (s *Service) HandleCheckTransactions(ctx context.Context, userID int64, _ m
 	rate, err := s.GetBTCRUBRate()
 	if err != nil {
 		s.logger.Warnf("Failed to get BTC/RUB rate, using fallback: %v", err)
-		rate = 3900027.0
+		rate = 3900027.0 // Лучше вынести в конфиг
 	}
-
-	s.logger.Warnf("RATE: %v", rate)
-	s.logger.Warnf("totalBTC: %v", totalBTC)
-	s.logger.Warnf("total rub: %v", totalBTC*rate)
 
 	totalRUB := totalBTC * rate
-	userModel := models.User{
-		TelegramID:     user.TelegramID,
-		CardNumber:     user.CardNumber,
-		Balance:        user.Balance + totalRUB,
-		SystemWalletID: user.SystemWalletID,
-	}
-	if err := s.repo.UpdateUser(ctx, &userModel, nil); err != nil {
-		return 0, fmt.Errorf("Не удалось обновить баланс: %v", err)
+
+	currentUser, err := s.GetUser(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("не удалось получить пользователя перед обновлением баланса: %v", err)
 	}
 
+	currentUser.Balance += totalRUB
+
+	if err := s.repo.UpdateUser(ctx, currentUser, nil); err != nil {
+		return 0, fmt.Errorf("не удалось обновить баланс: %v", err)
+	}
+
+	s.logger.Infof("Successfully added %.2f RUB to user %d balance.", totalRUB, userID)
 	return totalRUB, nil
 }
 
-func (s *Service) checkUserTransactions(ctx context.Context, address string) ([]models.Transaction, error) {
+func (s *Service) checkUserTransactions(ctx context.Context, user *models.User, notifyCallback models.NotifyCallback) ([]models.Transaction, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("%s/address/%s/txs", testnetAPIURL, address)
+	url := fmt.Sprintf("%s/address/%s/txs", testnetAPIURL, user.SystemWallet.Address)
 
 	resp, err := client.Get(url)
 	if err != nil {
@@ -106,7 +97,7 @@ func (s *Service) checkUserTransactions(ctx context.Context, address string) ([]
 		} `json:"vout"`
 		Status struct {
 			Confirmed bool `json:"confirmed"`
-		}
+		} `json:"status"`
 	}
 
 	if err := json.Unmarshal(body, &apiResponse); err != nil {
@@ -114,38 +105,47 @@ func (s *Service) checkUserTransactions(ctx context.Context, address string) ([]
 		return nil, fmt.Errorf("invalid API response format")
 	}
 
-	var newTransactions []models.Transaction
+	var processedNewTransactions []models.Transaction
 
-	for _, tx := range apiResponse {
-		for _, output := range tx.Vout {
-			if output.Address == address {
+	for _, txData := range apiResponse {
+		for _, output := range txData.Vout {
+			if output.Address == user.SystemWallet.Address {
 				amountBTC := float64(output.Value) / 1e8
 
-				isNew, err := s.processTransaction(ctx, tx.TxID, address, amountBTC, tx.Status.Confirmed)
+				isNew, err := s.processTransaction(ctx, txData.TxID, user.TelegramID, user.SystemWallet.Address, amountBTC, txData.Status.Confirmed)
 				if err != nil {
 					s.logger.Errorf("Transaction processing failed: %v", err)
 					continue
 				}
 
-				// Добавляем только новые транзакции
-				if isNew {
-					newTransactions = append(newTransactions, models.Transaction{
-						TxID:      tx.TxID,
-						Address:   address,
+				if isNew && txData.Status.Confirmed {
+					newTxModel := models.Transaction{
+						TxID:      txData.TxID,
+						UserID:    user.TelegramID,
+						Address:   user.SystemWallet.Address,
 						AmountBTC: amountBTC,
-						Confirmed: tx.Status.Confirmed,
-					})
+						Confirmed: true,
+					}
+
+					if notifyCallback != nil {
+						s.logger.Infof("SERVICE: New confirmed transaction %s found for user %d. CALLING NOTIFY CALLBACK.", newTxModel.TxID, user.TelegramID)
+						notifyCallback(user, &newTxModel)
+					} else {
+						s.logger.Error("SERVICE: NOTIFY CALLBACK IS NIL! Cannot notify bot.")
+					}
+
+					processedNewTransactions = append(processedNewTransactions, newTxModel)
 				}
 			}
 		}
 	}
 
-	return newTransactions, nil
+	return processedNewTransactions, nil
 }
 
-func (s *Service) processTransaction(ctx context.Context, txID, address string, amountBTC float64, confirmed bool) (bool, error) {
+func (s *Service) processTransaction(ctx context.Context, txID string, userID int64, address string, amountBTC float64, confirmed bool) (bool, error) {
 	if amountBTC <= 0 {
-		return false, fmt.Errorf("invalid amount: %.8f BTC", amountBTC)
+		return false, nil
 	}
 
 	existingTx, err := s.repo.GetTransaction(ctx, txID)
@@ -153,27 +153,22 @@ func (s *Service) processTransaction(ctx context.Context, txID, address string, 
 		return false, fmt.Errorf("failed to check existing transaction: %w", err)
 	}
 	if existingTx != nil {
-		return false, nil // уже есть, пропускаем
-	}
-
-	user, err := s.GetUserByAddress(ctx, address)
-	if err != nil {
-		return false, fmt.Errorf("failed to get user: %v", err)
+		return false, nil
 	}
 
 	tx := &models.Transaction{
 		TxID:      txID,
-		UserID:    user.TelegramID,
+		UserID:    userID,
 		Address:   address,
 		AmountBTC: amountBTC,
 		Confirmed: confirmed,
 	}
 
-	if err := s.CreateOrUpdateTransaction(ctx, tx); err != nil {
+	if err := s.repo.CreateOrUpdateTransaction(ctx, tx); err != nil {
 		return false, fmt.Errorf("failed to save transaction: %v", err)
 	}
 
-	return true, nil // новая транзакция
+	return true, nil
 }
 
 func (s *Service) GetBTCRUBRate() (float64, error) {

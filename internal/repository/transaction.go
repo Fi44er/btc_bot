@@ -17,7 +17,7 @@ func (r *Repository) GetTransaction(ctx context.Context, txID string) (*models.T
 		Error
 
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil // Возвращаем nil вместо ошибки, если транзакция не найдена
+		return nil, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transaction: %w", err)
@@ -32,13 +32,10 @@ func (r *Repository) CreateOrUpdateTransaction(ctx context.Context, tx *models.T
 
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Записи нет — создаём новую
 			return r.db.WithContext(ctx).Create(tx).Error
 		}
-		// Ошибка при запросе
 		return err
 	}
 
-	// Запись есть — обновляем
 	return r.db.WithContext(ctx).Model(&existing).Updates(tx).Error
 }
