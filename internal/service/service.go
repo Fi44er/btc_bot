@@ -27,7 +27,6 @@ type Repository interface {
 	CreateUser(ctx context.Context, user *models.User) error
 	UpdateUser(ctx context.Context, user *models.User, tx *gorm.DB) error
 	GetUserByAddress(ctx context.Context, address string) (*models.User, error)
-	GetAllUsersWithAddresses(ctx context.Context) ([]*models.User, error)
 
 	GetTransaction(ctx context.Context, txID string) (*models.Transaction, error)
 	CreateOrUpdateTransaction(ctx context.Context, tx *models.Transaction) error
@@ -53,6 +52,8 @@ type Repository interface {
 	GetPendingWithdrawalByUserID(ctx context.Context, userID int64) (*models.Withdrawal, error)
 	DeleteWithdrawal(ctx context.Context, id int64) error
 	UpdateUserBalance(ctx context.Context, userID int64, newBalance float64) error
+
+	GetAllUsersWithAddresses(ctx context.Context) ([]*models.User, error)
 }
 
 func NewUserService(repo Repository, masterKeySeed string, adminChatID int64, coconfig *config.Config, logger *utils.Logger) (*Service, error) {

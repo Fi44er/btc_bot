@@ -15,10 +15,10 @@ type User struct {
 
 type Withdrawal struct {
 	ID         uint    `gorm:"primaryKey" json:"id"`
-	UserID     int64   `json:"user_id" gorm:"uniqueIndex:idx_user_pending"` // уникальный индекс для одной активной заявки
+	UserID     int64   `json:"user_id" gorm:"uniqueIndex:idx_user_pending"`
 	CardNumber string  `json:"card_number"`
 	Amount     float64 `json:"amount"`
-	Status     string  `json:"status" gorm:"default:pending"` // pending, completed, rejected
+	Status     string  `json:"status" gorm:"default:pending"`
 	CreatedAt  string  `json:"created_at"`
 }
 
@@ -36,4 +36,4 @@ type SystemWallet struct {
 	PrivateKey string `json:"-" gorm:"type:varchar(255)"`
 }
 
-type NotifyCallback func(*User, *Transaction, bool)
+type NotifyCallback func(*User, *Transaction)
