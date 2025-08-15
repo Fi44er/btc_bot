@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/Fi44er/btc_bot/config"
 	"github.com/Fi44er/btc_bot/internal/models"
 	"github.com/Fi44er/btc_bot/utils"
+	"github.com/btcsuite/btcd/btcutil"
 	"github.com/btcsuite/btcd/btcutil/hdkeychain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"gorm.io/gorm"
@@ -67,7 +69,7 @@ func NewUserService(repo Repository, masterKeySeed string, adminChatID int64, co
 		config:      coconfig,
 		repo:        repo,
 		masterKey:   masterKey,
-		netParams:   &chaincfg.TestNet3Params,
+		netParams:   &chaincfg.MainNetParams,
 		adminChatID: adminChatID,
 	}, nil
 }
@@ -98,14 +100,9 @@ func (s *Service) UpdateUserWallet(ctx context.Context, telegramID int64) (*mode
 		return user, nil
 	}
 
-	address, err := s.generateNewAddress()
+	address, privateAddrKey, err := s.generateNewAddressAndKey()
 	if err != nil {
-		return nil, err
-	}
-
-	privateAddrKey, err := utils.GetAddressPrivateKey(s.config.MasterKeySeed, address, &chaincfg.TestNet3Params)
-	if err != nil {
-		s.logger.Errorf("Failed to get private key: %v", err)
+		s.logger.Errorf("Failed to generate new address and key: %v", err)
 		return nil, err
 	}
 
@@ -177,17 +174,35 @@ func (s *Service) CreateOrUpdateTransaction(ctx context.Context, tx *models.Tran
 	return s.repo.CreateOrUpdateTransaction(ctx, tx)
 }
 
-func (s *Service) generateNewAddress() (string, error) {
-	child, err := s.masterKey.Derive(s.addressIdx)
+func (s *Service) generateNewAddressAndKey() (string, string, error) {
+	chainKey, err := s.masterKey.Derive(0)
 	if err != nil {
-		return "", err
+		return "", "", fmt.Errorf("ошибка получения ключа для цепочки (m/0): %v", err)
 	}
 
-	addr, err := child.Address(s.netParams)
+	childKey, err := chainKey.Derive(s.addressIdx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
+
+	addr, err := childKey.Address(s.netParams)
+	if err != nil {
+		return "", "", err
+	}
+	addressStr := addr.EncodeAddress()
+
+	privKey, err := childKey.ECPrivKey()
+	if err != nil {
+		return "", "", fmt.Errorf("не удалось получить ECPrivKey: %v", err)
+	}
+
+	wif, err := btcutil.NewWIF(privKey, s.netParams, true)
+	if err != nil {
+		return "", "", fmt.Errorf("не удалось создать WIF: %v", err)
+	}
+	privateKeyWIF := wif.String()
 
 	s.addressIdx++
-	return addr.EncodeAddress(), nil
+
+	return addressStr, privateKeyWIF, nil
 }

@@ -71,7 +71,7 @@ func (s *Service) HandleCheckTransactions(ctx context.Context, userID int64, not
 
 func (s *Service) checkUserTransactions(ctx context.Context, user *models.User, notifyCallback models.NotifyCallback) ([]models.Transaction, error) {
 	client := &http.Client{Timeout: 10 * time.Second}
-	url := fmt.Sprintf("%s/address/%s/txs", testnetAPIURL, user.SystemWallet.Address)
+	url := fmt.Sprintf("%s/address/%s/txs", mainnetAPIURL, user.SystemWallet.Address)
 
 	resp, err := client.Get(url)
 	if err != nil {

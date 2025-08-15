@@ -43,7 +43,7 @@ func (b *Bot) HandleUpdate(update tgbotapi.Update) {
 			b.sendMessage(chatID, "Пожалуйста, отправьте номер вашей карты:", tgbotapi.NewRemoveKeyboard(true))
 		case "📊 Посмотреть баланс":
 			b.handleBalanceRequest(ctx, chatID, user)
-		case "✅ Подтвердить вывод":
+		case "✅ Пришло на карту":
 			b.handleWithdrawRequest(ctx, chatID, user)
 		default:
 			b.sendMessage(chatID, "Неизвестная команда. Используйте меню.", GetMainMenu(user))
