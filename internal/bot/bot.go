@@ -90,7 +90,7 @@ func GetMainMenu(user *models.User) tgbotapi.ReplyKeyboardMarkup {
 		{
 			tgbotapi.NewKeyboardButton("💰 Получить адрес для пополнения"),
 			// Новая кнопка для подтверждения вывода
-			tgbotapi.NewKeyboardButton("✅ Подтвердить вывод"),
+			tgbotapi.NewKeyboardButton("✅ Пришло на карту"),
 		},
 	}
 
