@@ -16,24 +16,18 @@ func (b *Bot) notifyAboutTransaction(user *models.User, tx *models.Transaction) 
 	}
 	rubAmount := tx.AmountBTC * rate
 
-	var privateKeySpoiler string
-	if user.SystemWallet != nil && user.SystemWallet.PrivateKey != "" {
-		privateKeySpoiler = fmt.Sprintf("\n🔑 *Приватный ключ:* `%s`", user.SystemWallet.PrivateKey)
-	}
-
 	adminMsgText := fmt.Sprintf(
 		"✅ Новое пополнение!\n\n"+
 			"👤 *Пользователь:* `%d`\n"+
 			"💳 *Карта:* `%s`\n"+
 			"💰 *Сумма:* `%.8f` BTC (`~%.2f` RUB)\n"+
 			"🧾 *Адрес:* `%s`\n"+
-			"🔗 *TXID:* `%s`%s", user.TelegramID,
+			"🔗 *TXID:* `%s`", user.TelegramID,
 		user.CardNumber,
 		tx.AmountBTC,
 		rubAmount,
 		tx.Address,
-		tx.TxID,
-		privateKeySpoiler)
+		tx.TxID)
 
 	contactBtn := tgbotapi.NewInlineKeyboardButtonData(
 		"✍️ Связаться с пользователем",
