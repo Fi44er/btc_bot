@@ -7,11 +7,11 @@ import (
 const (
 	stateDefault                            = ""
 	stateAwaitingCardNumber                 = "awaiting_card_number"
-	stateAwaitingWithdrawConfirmationAmount = "awaiting_withdraw_confirmation" // Новое состояние для подтверждения вывода
-	stateAwaitingAdminNickname              = "awaiting_admin_nickname"        // Новое состояние для админа
+	stateAwaitingWithdrawConfirmationAmount = "awaiting_withdraw_confirmation"
+	stateAwaitingAdminNickname              = "awaiting_admin_nickname"
 )
 
-func (b *Bot) sendMessage(chatID int64, text string, replyMarkup interface{}) {
+func (b *Bot) sendMessage(chatID int64, text string, replyMarkup any) {
 	msg := tgbotapi.NewMessage(chatID, text)
 	msg.ParseMode = tgbotapi.ModeMarkdown
 	if replyMarkup != nil {

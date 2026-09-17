@@ -49,7 +49,7 @@ func (s *Service) HandleCheckTransactions(ctx context.Context, userID int64, not
 	rate, err := s.GetBTCRUBRate()
 	if err != nil {
 		s.logger.Warnf("Failed to get BTC/RUB rate, using fallback: %v", err)
-		rate = 3900027.0 // Лучше вынести в конфиг
+		rate = 3900027.0
 	}
 
 	totalRUB := totalBTC * rate

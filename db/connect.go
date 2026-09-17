@@ -42,7 +42,7 @@ func Migrate(db *gorm.DB, trigger bool, log *utils.Logger) error {
 
 	if trigger {
 		log.Info("📦 Migrating database...")
-		models := []interface{}{
+		models := []any{
 			&models.SystemWallet{},
 			&models.User{},
 			&models.Transaction{},

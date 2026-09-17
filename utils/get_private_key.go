@@ -10,7 +10,6 @@ import (
 )
 
 func GetAddressPrivateKey(masterKeyStr string, targetAddress string, params *chaincfg.Params) (string, error) {
-	// params := &chaincfg.TestNet3Params
 	masterKey, err := hdkeychain.NewKeyFromString(masterKeyStr)
 	if err != nil {
 		log.Fatalf("Ошибка декодирования мастер-ключа: %v", err)
